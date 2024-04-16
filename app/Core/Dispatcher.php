@@ -3,6 +3,11 @@
 namespace App\Core;
 
 use App\Core\RouteCollection;
+use Database\Database;
+use Dotenv\Dotenv;
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+use PDO;
 
 class Dispatcher
 {
@@ -31,6 +36,8 @@ class Dispatcher
 
     $params = $this->routes->getParams($path, $route);
 
+    if ($route->getAuth()) $this->getToken();
+
     $controllerClass = $route->getController();
     $controller = new $controllerClass();
     $controllerMethod = $route->getMethod();
@@ -43,6 +50,50 @@ class Dispatcher
     header('Content-Type: text/plain');
     echo $message;
     exit();
+  }
+
+  private function getToken()
+  {
+    $dotenv = Dotenv::createImmutable(__DIR__ . '/../../');
+    $dotenv->load();
+
+    $headers = apache_request_headers();
+
+    $authorization = $headers['Authorization'] ?? die(json_encode([
+      'message' => 'Unauthenticated',
+      'status' => 'error'
+    ]));
+
+    $authorizationArray = explode(' ', $authorization);
+    $token = $authorizationArray[1];
+
+    try {
+      $decodedToken = JWT::decode($token, new Key($_ENV['API_SECRET_KEY'], 'HS256'));
+    } catch (\Throwable $th) {
+      http_response_code(500);
+      die(json_encode([
+        'message' => $th->getMessage(),
+        'status' => 'error'
+      ]));
+    }
+
+    if (!$this->validateToken($decodedToken)) {
+      http_response_code(403);
+      die(json_encode([
+        'message' => 'Unauthorized',
+        'status' => 'error'
+      ]));
+    }
+  }
+
+  private function validateToken(object $decodedToken): bool|int
+  {
+    $query = "SELECT * FROM users WHERE id = :id";
+    $statement = Database::getConnection()->prepare($query);
+    $statement->bindParam(":id", $decodedToken->data->user_id, PDO::PARAM_INT);
+    $statement->execute();
+
+    return $statement->fetchColumn();
   }
 }
 
